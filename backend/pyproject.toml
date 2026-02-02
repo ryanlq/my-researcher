@@ -1,0 +1,14 @@
+[project]
+name = "backend"
+version = "2.0.0"
+description = "GPT Researcher - Simplified Backend"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "gpt-researcher>=0.3.0",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.5.0",
+    "ddgs>=9.0.0",  # 搜索引擎（DuckDuckGo，新包名）
+]

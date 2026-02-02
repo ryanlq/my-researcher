@@ -1,0 +1,149 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: gpt_researcher_db
+    environment:
+      POSTGRES_USER: gpt_researcher
+      POSTGRES_PASSWORD: gpt_researcher_pass
+      POSTGRES_DB: gpt_researcher
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gpt_researcher"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - gpt_researcher_network
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    container_name: gpt_researcher_redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - gpt_researcher_network
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: gpt_researcher_backend
+    environment:
+      - DATABASE_URL=postgresql://gpt_researcher:gpt_researcher_pass@postgres:5432/gpt_researcher
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+      - FAST_LLM=${FAST_LLM:-openai:gpt-4o-mini}
+      - SMART_LLM=${SMART_LLM:-openai:gpt-4o}
+      - STRATEGIC_LLM=${STRATEGIC_LLM:-openai:o1-preview}
+      - EMBEDDING=${EMBEDDING:-openai:text-embedding-3-small}
+      - RETRIEVER=${RETRIEVER:-tavily}
+      - DEEP_RESEARCH_BREADTH=${DEEP_RESEARCH_BREADTH:-5}
+      - DEEP_RESEARCH_DEPTH=${DEEP_RESEARCH_DEPTH:-3}
+      - DEEP_RESEARCH_CONCURRENCY=${DEEP_RESEARCH_CONCURRENCY:-4}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/app:/app/app
+      - uploads:/app/uploads
+      - logs:/app/logs
+      - vectors:/app/data/vectors
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - gpt_researcher_network
+
+  # Celery Worker
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: gpt_researcher_celery_worker
+    command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=2
+    environment:
+      - DATABASE_URL=postgresql://gpt_researcher:gpt_researcher_pass@postgres:5432/gpt_researcher
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+      - FAST_LLM=${FAST_LLM:-openai:gpt-4o-mini}
+      - SMART_LLM=${SMART_LLM:-openai:gpt-4o}
+    volumes:
+      - ./backend/app:/app/app
+      - uploads:/app/uploads
+      - logs:/app/logs
+      - vectors:/app/data/vectors
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - gpt_researcher_network
+
+  # Flower (Celery Monitoring)
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: gpt_researcher_flower
+    command: celery -A app.tasks.celery_app flower --port=5555
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+    networks:
+      - gpt_researcher_network
+
+  # Qdrant (Vector Database)
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: gpt_researcher_qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - gpt_researcher_network
+
+volumes:
+  postgres_data:
+  redis_data:
+  uploads:
+  logs:
+  vectors:
+  qdrant_data:
+
+networks:
+  gpt_researcher_network:
+    driver: bridge
